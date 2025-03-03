@@ -53,7 +53,8 @@ async function main() {
   const TokenTreasury = await hre.ethers.getContractFactory("PlanetTreasury");
   const tokenTreasury = await TokenTreasury.deploy(
     deployer.address,
-    azimuth.target
+    azimuth.target,
+    "4278124800000000000000000000"
   );
   await tokenTreasury.waitForDeployment();
   console.log("PlanetTreasury deployed to:", tokenTreasury.target);
