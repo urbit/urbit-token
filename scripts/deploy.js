@@ -53,8 +53,7 @@ async function main() {
   const TokenTreasury = await hre.ethers.getContractFactory("PlanetTreasury");
   const tokenTreasury = await TokenTreasury.deploy(
     deployer.address,
-    azimuth.target,
-    "4278124800000000000000000000"
+    azimuth.target
   );
   await tokenTreasury.waitForDeployment();
   console.log("PlanetTreasury deployed to:", tokenTreasury.target);
@@ -157,6 +156,11 @@ async function main() {
     console.log("\nSpawning Star 768...");
     await ecliptic.spawn(768, deployer.address);
     console.log("Star 768 spawned for:", deployer.address);
+
+    // set spawn proxy to planet treasury for star 256
+    console.log("\nSetting spawn proxy for Star 256...");
+    await ecliptic.setSpawnProxy(256, tokenTreasury.target);
+    console.log("Spawn proxy set for Star 256.");
 
     //   // spawn planet 65792
     //   console.log("\nSpawning Planet 65792...");

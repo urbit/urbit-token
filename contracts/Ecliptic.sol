@@ -344,41 +344,6 @@ contract Ecliptic is EclipticBase, SupportsInterfaceWithLookup, ERC721Metadata {
         );
     }
 
-    // tokenRedemptionSpawn(): Redeem 1 ERC20 token to spawn a planet under a depleted star
-    //
-    // Requirements:
-    // - _point must be a planet
-    // - _point must not be spawned (unowned)
-    // - _point's prefix (star) must have its spawning capacity withdrawn
-    // - User must have approved the Ecliptic contract to transfer 1e18 tokens
-    //
-    function tokenRedemptionSpawn(uint32 _point) external {
-        // Ensure the point is a planet
-        require(
-            azimuth.getPointSize(_point) == Azimuth.Size.Planet,
-            "Must be a planet"
-        );
-
-        // Ensure the planet is unspawned
-        require(azimuth.isOwner(_point, 0x0), "Planet already spawned");
-
-        // Get the star prefix and check if it's depleted
-        uint16 prefix = azimuth.getPrefix(_point);
-        require(
-            tokenTreasury.isDepleted(prefix),
-            "Planet not available for spawning"
-        );
-
-        // Transfer 1 token from the user to the treasury
-        planetToken.transferFrom(msg.sender, address(tokenTreasury), 1e18);
-
-        //  Burn one token
-        tokenTreasury.burn(prefix);
-
-        // Spawn the planet and assign ownership directly to the caller
-        doSpawn(_point, msg.sender, true, 0x0);
-    }
-
     //  spawn(): spawn _point, then either give, or allow _target to take,
     //           ownership of _point
     //
@@ -400,6 +365,12 @@ contract Ecliptic is EclipticBase, SupportsInterfaceWithLookup, ERC721Metadata {
         //  prefix: half-width prefix of _point
         //
         uint16 prefix = azimuth.getPrefix(_point);
+
+        //  can't spawn if proxy is set to token treasury
+        require(
+            azimuth.getSpawnProxy(prefix) != address(tokenTreasury),
+            "Spawning rights have been forfeited"
+        );
 
         //  can't spawn if we deposited ownership or spawn rights to L2
         //
@@ -436,18 +407,6 @@ contract Ecliptic is EclipticBase, SupportsInterfaceWithLookup, ERC721Metadata {
         //
         require(azimuth.canSpawnAs(prefix, msg.sender));
 
-        //  If it's a star that's spawning, check if it has spawn capacity or is depleted
-
-        if (azimuth.getPointSize(prefix) == Azimuth.Size.Star) {
-            require(
-                !tokenTreasury.isDepleted(prefix),
-                "Star has no available spawn capacity"
-            );
-
-            //  Burn one token
-            tokenTreasury.burn(prefix);
-        }
-
         //  if the caller is spawning the point to themselves,
         //  assume it knows what it's doing and resolve right away
         //
@@ -457,7 +416,6 @@ contract Ecliptic is EclipticBase, SupportsInterfaceWithLookup, ERC721Metadata {
         //
         //  when sending to a "foreign" address, enforce a withdraw pattern
         //  making the _point prefix's owner the _point owner in the mean time
-        //  TODO: Change to direct spawning instead?
         //
         else {
             doSpawn(_point, _target, false, azimuth.getOwner(prefix));
@@ -532,13 +490,15 @@ contract Ecliptic is EclipticBase, SupportsInterfaceWithLookup, ERC721Metadata {
         //
         require(azimuth.canTransfer(_point, msg.sender));
 
-        //  can't deposit galaxy to L2
-        //  can't deposit contract-owned point to L2
-        //
+        //  can’t deposit galaxy to L2, can’t deposit contract-owned point to L2,
+        //  and can’t deposit if proxy is set to token treasury
+        address proxy = azimuth.getSpawnProxy(_point);
         require(
             depositAddress != _target ||
                 (azimuth.getPointSize(_point) != Azimuth.Size.Galaxy &&
-                    !azimuth.getOwner(_point).isContract())
+                    !azimuth.getOwner(_point).isContract() &&
+                    proxy != address(tokenTreasury)),
+            "L2 deposit disallowed for this point"
         );
 
         //  if the point wasn't active yet, that means transferring it
@@ -614,9 +574,10 @@ contract Ecliptic is EclipticBase, SupportsInterfaceWithLookup, ERC721Metadata {
 
             //  clear spawning proxy
             //
-            //    don't clear if the spawn rights have been deposited to L2,
-            //
-            if (depositAddress != azimuth.getSpawnProxy(_point)) {
+            //    don't clear if the spawn rights have been deposited to L2, or
+            //    if proxy is set to the token treasury
+
+            if (proxy != depositAddress && proxy != address(tokenTreasury)) {
                 azimuth.setSpawnProxy(_point, 0);
             }
 
@@ -818,13 +779,25 @@ contract Ecliptic is EclipticBase, SupportsInterfaceWithLookup, ERC721Metadata {
     //
     //    takes a uint16 so that we can't set spawn proxy for a planet
     //
-    //    fails if spawn rights have been deposited to L2
+    //    fails if spawn rights have been deposited to L2 or if the
+    //    spawn proxy is set to the token treasury
     //
     function setSpawnProxy(
         uint16 _prefix,
         address _spawnProxy
     ) external activePointSpawner(_prefix) onL1(_prefix) {
-        require(depositAddress != azimuth.getSpawnProxy(_prefix));
+        address current = azimuth.getSpawnProxy(_prefix);
+
+        // disallow any change while rights are on L2
+        require(current != depositAddress, "Spawn rights on L2");
+
+        // if rights are locked in the token treasury, only it may clear them
+        if (current == address(tokenTreasury)) {
+            require(
+                msg.sender == address(tokenTreasury),
+                "Only treasury can clear proxy"
+            );
+        }
 
         azimuth.setSpawnProxy(_prefix, _spawnProxy);
     }

@@ -14,7 +14,7 @@ const MyApp = () => {
   const [allShips, setAllShips] = useState([]);
   const [walletAddress, setWalletAddress] = useState(null);
   const [balance, setBalance] = useState(null);
-  const [isDepleted, setIsDepleted] = useState(null);
+  const [hasWithdrawn, setHasWithdrawn] = useState(null);
   const [unspawnedCount, setUnspawnedCount] = useState(0);
   const [treasuryBalance, setTreasuryBalance] = useState(null);
   const [keyRevisionNumber, setKeyRevisionNumber] = useState(0);
@@ -57,7 +57,7 @@ const MyApp = () => {
       await Promise.all([
         fetchShips(),
         fetchBalance(),
-        fetchIsDepleted(),
+        fetchHasWithdrawn(),
         fetchUnspawnedCount(),
         fetchTreasuryBalance(),
         fetchKeys(),
@@ -111,8 +111,39 @@ const MyApp = () => {
     return point >= 256 && point < 65536;
   };
 
+  const assignSpawnProxyToTreasury = async () => {
+    if (!selectedShip) return;
+    const signer = await provider.getSigner();
+    const contract_ecliptic = new ethers.Contract(
+      ECLIPTIC_ADDRESS,
+      EclipticABI.abi,
+      signer
+    );
+
+    try {
+      console.log("Setting spawn proxy...");
+      const tx = await contract_ecliptic.setSpawnProxy(
+        selectedShip,
+        PLANET_TREASURY_ADDRESS
+      );
+      console.log("tx:", JSON.stringify(tx));
+      await tx.wait();
+      console.log(`Spawn proxy set for ${ob.patp(selectedShip)}`);
+      // refresh
+      fetchShips();
+      fetchAllowance();
+      fetchTotalSupply();
+      fetchHasWithdrawn();
+      fetchUnspawnedCount();
+      fetchBalance();
+      fetchTreasuryBalance();
+    } catch (error) {
+      console.error("Error setting spawn proxy:", error);
+    }
+  };
+
   const spawnUsingToken = async () => {
-    if (!isDepleted) {
+    if (!hasWithdrawn) {
       console.error("This star still has its capacity!");
       return;
     }
@@ -159,7 +190,7 @@ const MyApp = () => {
   };
 
   const spawnPlanet = async () => {
-    if (isDepleted) {
+    if (hasWithdrawn) {
       console.error("No capacity available to spawn a planet.");
       return;
     }
@@ -265,7 +296,7 @@ const MyApp = () => {
       console.log(`Capacity withdrawn from ${ob.patp(selectedShip)}`);
 
       // refresh
-      fetchIsDepleted();
+      fetchHasWithdrawn();
       fetchBalance();
       fetchAllowance();
       fetchTreasuryBalance();
@@ -293,7 +324,7 @@ const MyApp = () => {
 
       console.log(`Capacity deposited to ${ob.patp(selectedShip)}`);
       // refresh
-      fetchIsDepleted();
+      fetchHasWithdrawn();
       fetchBalance();
       fetchAllowance();
       fetchTotalSupply();
@@ -412,11 +443,11 @@ const MyApp = () => {
     }
   };
 
-  const fetchIsDepleted = async () => {
+  const fetchHasWithdrawn = async () => {
     if (!selectedShip) return;
 
     if (!isStar(selectedShip)) {
-      setIsDepleted(true);
+      setHasWithdrawn(true);
       return;
     }
 
@@ -427,11 +458,11 @@ const MyApp = () => {
     );
 
     try {
-      const isDepleted = await contract_treasury.isDepleted(selectedShip);
+      const withdrawn = await contract_treasury.hasWithdrawn(selectedShip);
 
-      setIsDepleted(isDepleted);
+      setHasWithdrawn(withdrawn);
     } catch (error) {
-      console.error("Error fetching isDepleted:", error);
+      console.error("Error fetching hasWithdrawn:", error);
     }
   };
 
@@ -642,8 +673,10 @@ const MyApp = () => {
                     <div style={{ paddingRight: "8px", fontWeight: "bold" }}>
                       Has Capacity:
                     </div>
-                    <div style={{ color: !isDepleted ? "#22c55e" : "#ef4444" }}>
-                      {!isDepleted ? "TRUE" : "FALSE"}
+                    <div
+                      style={{ color: !hasWithdrawn ? "#22c55e" : "#ef4444" }}
+                    >
+                      {!hasWithdrawn ? "TRUE" : "FALSE"}
                     </div>
                   </div>
 
@@ -690,7 +723,7 @@ const MyApp = () => {
                 {isStar(selectedShip) && (
                   <>
                     <button
-                      onClick={() => spawnUsingToken()}
+                      onClick={() => assignSpawnProxyToTreasury()}
                       style={{
                         marginRight: "12px",
                         backgroundColor: "#3b82f6",
@@ -703,9 +736,9 @@ const MyApp = () => {
                         cursor: "pointer",
                       }}
                     >
-                      {`Redeem Planet from ${ob.patp(
+                      {`Set Spawn Proxy for ${ob.patp(
                         selectedShip
-                      )} Using Token`}
+                      )} to Treasury`}
                     </button>
 
                     <button
@@ -745,7 +778,7 @@ const MyApp = () => {
                       </button>
                     )}
 
-                    {isDepleted ? (
+                    {hasWithdrawn ? (
                       <button
                         onClick={() => depositCapacity()}
                         style={{

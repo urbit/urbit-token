@@ -1,204 +1,160 @@
 // SPDX-License-Identifier: MIT
 pragma solidity ^0.8.0;
 
-import "@openzeppelin/contracts/token/ERC20/IERC20.sol";
 import "@openzeppelin/contracts/access/Ownable.sol";
 import "@openzeppelin/contracts/utils/ReentrancyGuard.sol";
 import "./interface/IAzimuth.sol";
+import "./interface/IEcliptic.sol";
 import "./PlanetToken.sol";
 
-//  PlanetTreasury: manage capacity for spawning planets
-//
-//    This contract allows star owners to revoke their capacity to spawn planets and
-//    instead receive ERC-20 tokens. They may also deposit tokens to regain spawning capacity.
-//    The initial supply of ERC-20 tokens are minted by the PlanetToken contract and transferred
-//    to this contract immediately, with the token supply being equal to the total number
-//    of unspawned planets at the time of deployment.
-//
-//    The Ecliptic contract shall be the owner of this contract, and will instruct this contract
-//    to burn one token per planet spawned.
-//
-//    No partial deposits or withdrawals are allowed -- the amount being transacted will
-//    always be equal to the star's current unspawned count.
-//
+/**
+ * @title PlanetTreasury
+ * @notice Manage capacity for spawning planets
+ *
+ * @dev This contract allows star owners to revoke their capacity to spawn planets
+ * and instead receive ERC-20 tokens. They may also deposit tokens to regain spawning capacity.
+ *
+ * The Ecliptic contract must be the owner of this contract. PlanetTreasury relies on
+ * Ecliptic's record of each star’s spawn count to determine the number of tokens
+ * to mint when withdrawing (or burn when depositing) spawn capacity.
+ *
+ * No partial deposits or withdrawals are allowed — the amount being transacted
+ * will always equal the star's current unspawned planet count.
+ */
 
 contract PlanetTreasury is Ownable, ReentrancyGuard {
-    // IAzimuth: Azimuth contract reference
-    //
     IAzimuth public immutable azimuth;
-
-    // PlanetToken: ERC-20 token contract reference
-    //
     PlanetToken public immutable planetToken;
 
-    // isDepleted: Indicates whether or not a star has capacity to spawn planets
-    //
-    mapping(uint16 => bool) public isDepleted;
+    /// @notice true once a star’s tokens have been withdrawn
+    mapping(uint16 => bool) public hasWithdrawn;
 
-    // Events
-
-    // TokensWithdrawn: Emitted when tokens are withdrawn from a star's escrow
-    //
     event TokensWithdrawn(uint16 indexed starId, uint256 amount);
-
-    // TokensDeposited: Emitted when tokens are deposited into a star's escrow
-    //
     event TokensDeposited(uint16 indexed starId, uint256 amount);
 
-    // TokenBurned: Emitted when a token is burned during the spawn process
-    //
-    event TokenBurned(uint16 indexed starId);
-
-    //  constructor(): Initialize the contract with the Azimuth and PlanetToken contracts
-    //
-    constructor(
-        address initialOwner,
-        IAzimuth _azimuth,
-        uint256 initialSupply
-    ) Ownable(initialOwner) {
+    constructor(address initialOwner, IAzimuth _azimuth) Ownable(initialOwner) {
         azimuth = _azimuth;
-        planetToken = new PlanetToken(address(this), initialSupply);
+        planetToken = new PlanetToken(address(this));
     }
 
-    // withdrawCapacity: Withdraw all tokens from a star's escrow, removing capacity to spawn planets
-    //
+    /**
+     * @notice The star relinquishes its spawn capacity and receives tokens
+     */
     function withdrawCapacity(uint16 _starId) external nonReentrant {
-        // Must be the star owner (TODO: extend to addresses with valid permissions?)
         address owner = azimuth.getOwner(_starId);
         require(msg.sender == owner, "Must be star owner");
 
-        // Must have capacity to withdraw
-        require(!isDepleted[_starId], "Star does not have capacity");
-
-        // Get unspawned planet count from Ecliptic, which determines the balance to withdraw
-        uint256 balance = uint256(getUnspawnedCount(_starId)) * 1e18;
-
-        // Transfer tokens from Treasury to the star owner
         require(
-            planetToken.transfer(msg.sender, balance),
-            "PlanetTreasury: Transfer failed"
+            azimuth.getSpawnProxy(uint32(_starId)) == address(this),
+            "Must set proxy to treasury first"
         );
 
-        // Mark the star as depleted
-        isDepleted[_starId] = true;
+        require(!hasWithdrawn[_starId], "Spawn capacity already withdrawn");
 
-        emit TokensWithdrawn(_starId, balance);
+        uint256 amount = uint256(getUnspawnedCount(_starId)) * 1e18;
+        planetToken.mint(msg.sender, amount);
+
+        hasWithdrawn[_starId] = true;
+        emit TokensWithdrawn(_starId, amount);
     }
 
-    // batchWithdrawCapacity: Withdraw tokens from multiple stars' escrows
-    //
+    /**
+     * @notice Batch version of withdrawCapacity
+     */
 
     function batchWithdrawCapacity(
         uint16[] calldata _starIds
     ) external nonReentrant {
-        // Initialize total balance and a memory array to store individual balances
-        uint256 totalBalance = 0;
-        uint256[] memory balances = new uint256[](_starIds.length);
+        for (uint256 i = 0; i < _starIds.length; i++) {
+            uint16 starId = _starIds[i];
 
-        //  Check conditions and calculate balances
-        for (uint i = 0; i < _starIds.length; i++) {
-            uint16 star = _starIds[i];
-            address owner = azimuth.getOwner(star);
-            require(msg.sender == owner, "Must be star owner");
-            require(!isDepleted[star], "Star does not have capacity");
-            balances[i] = uint256(getUnspawnedCount(star)) * 1e18;
-            totalBalance += balances[i];
-        }
+            require(msg.sender == azimuth.getOwner(starId), "Not star owner");
+            require(
+                azimuth.getSpawnProxy(uint32(starId)) == address(this),
+                "Spawn proxy not set"
+            );
+            require(!hasWithdrawn[starId], "Already withdrawn");
 
-        // Send the total balance to the sender
-        require(
-            planetToken.transfer(msg.sender, totalBalance),
-            "PlanetTreasury: Transfer failed"
-        );
+            uint256 amount = uint256(getUnspawnedCount(starId)) * 1e18;
+            planetToken.mint(msg.sender, amount);
 
-        // Mark stars as depleted
-        for (uint i = 0; i < _starIds.length; i++) {
-            uint16 star = _starIds[i];
-            isDepleted[star] = true;
-            emit TokensWithdrawn(star, balances[i]);
+            hasWithdrawn[starId] = true;
+            emit TokensWithdrawn(starId, amount);
         }
     }
-
-    // depositCapacity: Deposit tokens into a star's escrow, regaining capacity to spawn planets
-    //
+    /**
+     * @notice Deposit tokens and restore spawn rights by clearing proxy
+     */
     function depositCapacity(uint16 _starId) external nonReentrant {
-        uint256 amount = uint256(getUnspawnedCount(_starId)) * 1e18;
+        require(hasWithdrawn[_starId], "Nothing to deposit");
 
-        // Must be the star owner
         address owner = azimuth.getOwner(_starId);
         require(msg.sender == owner, "Must be star owner");
-
-        // Check if the msg.sender has enough tokens
         require(
-            planetToken.balanceOf(msg.sender) >= amount,
-            "PlanetTreasury: Insufficient balance"
+            azimuth.getSpawnProxy(uint32(_starId)) == address(this),
+            "Not withdrawn"
         );
 
-        // Check if the token spend approval is in place
+        uint256 amount = uint256(getUnspawnedCount(_starId)) * 1e18;
         require(
             planetToken.allowance(msg.sender, address(this)) >= amount,
-            "PlanetTreasury: Insufficient allowance"
+            "Insufficient allowance"
         );
 
-        // Transfer tokens from sender to Treasury
-        require(
-            planetToken.transferFrom(msg.sender, address(this), amount),
-            "PlanetTreasury: Transfer failed"
-        );
+        // burn tokens from the sender
+        planetToken.burnFrom(msg.sender, amount);
 
-        // Mark the star as not depleted
-        isDepleted[_starId] = false;
+        // Clear spawn proxy to restore rights
 
+        IEcliptic ecliptic = IEcliptic(azimuth.owner());
+
+        ecliptic.setSpawnProxy(_starId, address(0));
+        hasWithdrawn[_starId] = false;
         emit TokensDeposited(_starId, amount);
     }
 
-    // batchDepositCapacity: Deposit tokens into multiple stars' escrows
-    //
+    /**
+     * @notice Batch version of depositCapacity
+     */
     function batchDepositCapacity(
         uint16[] calldata _starIds
     ) external nonReentrant {
-        // Initialize total amount and an array to store individual amounts
         uint256 totalAmount = 0;
         uint256[] memory amounts = new uint256[](_starIds.length);
 
-        // Calculate amounts for each star and accumulate the total
-        for (uint i = 0; i < _starIds.length; i++) {
-            uint16 star = _starIds[i];
-            amounts[i] = uint256(getUnspawnedCount(star)) * 1e18;
-            totalAmount += amounts[i];
+        // Calculate total burn amount first
+        for (uint256 i = 0; i < _starIds.length; i++) {
+            uint16 starId = _starIds[i];
+            require(hasWithdrawn[starId], "Nothing to deposit");
+            require(msg.sender == azimuth.getOwner(starId), "Not star owner");
+            require(
+                azimuth.getSpawnProxy(uint32(starId)) == address(this),
+                "Not withdrawn"
+            );
+
+            uint256 amount = uint256(getUnspawnedCount(starId)) * 1e18;
+            amounts[i] = amount;
+            totalAmount += amount;
         }
 
-        // Transfer tokens from sender to Treasury
-        require(
-            planetToken.transferFrom(msg.sender, address(this), totalAmount),
-            "PlanetTreasury: Transfer failed"
-        );
+        // Burn entire amount once
+        planetToken.burnFrom(msg.sender, totalAmount);
 
-        // Mark all stars as not depleted
-        for (uint i = 0; i < _starIds.length; i++) {
-            uint16 star = _starIds[i];
-            isDepleted[star] = false;
-            emit TokensDeposited(star, amounts[i]);
+        // Restore spawn rights and reset flags
+        IEcliptic ecliptic = IEcliptic(azimuth.owner());
+        for (uint256 i = 0; i < _starIds.length; i++) {
+            uint16 starId = _starIds[i];
+            ecliptic.setSpawnProxy(starId, address(0));
+            hasWithdrawn[starId] = false;
+
+            emit TokensDeposited(starId, amounts[i]);
         }
     }
 
-    // Burn token from escrow during the spawn process
-    //
-    function burn(uint16 _starId) external nonReentrant onlyOwner {
-        planetToken.burn(1e18);
-
-        emit TokenBurned(_starId);
-    }
-
-    // getUnspawnedCount: Get the number of unspawned planets for a star
-    //
+    /**
+     * @notice Returns number of unspawned planets for a star
+     */
     function getUnspawnedCount(uint32 _starId) public view returns (uint32) {
         return 65535 - azimuth.getSpawnCount(_starId);
-    }
-
-    // getTreasuryBalance: Get the balance of the treasury
-    //
-    function getTreasuryBalance() public view returns (uint256) {
-        return planetToken.balanceOf(address(this));
     }
 }
