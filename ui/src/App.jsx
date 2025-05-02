@@ -9,7 +9,10 @@ import AzimuthABI from "../../artifacts/contracts/Azimuth.sol/Azimuth.json";
 import EclipticABI from "../../artifacts/contracts/Ecliptic.sol/Ecliptic.json";
 import contractAddresses from "./contracts.json";
 
-const MyApp = () => {
+const INFURA_ID = import.meta.env.VITE_INFURA_API_KEY;
+const PRIVATE_KEY = import.meta.env.VITE_PRIVATE_KEY;
+
+const TokenUI = () => {
   const [selectedShip, setSelectedShip] = useState(null);
   const [allShips, setAllShips] = useState([]);
   const [walletAddress, setWalletAddress] = useState(null);
@@ -31,7 +34,10 @@ const MyApp = () => {
     CLAIMS_ADDRESS,
   } = contractAddresses;
 
-  const provider = new ethers.JsonRpcProvider("http://127.0.0.1:8545");
+  // const provider = new ethers.JsonRpcProvider("http://127.0.0.1:8545");
+  const provider = new ethers.JsonRpcProvider(
+    `https://sepolia.infura.io/v3/${INFURA_ID}`
+  );
 
   // Create a contract instance
   const contract_azimuth = new ethers.Contract(
@@ -71,7 +77,8 @@ const MyApp = () => {
   }, [walletAddress, selectedShip]);
 
   const spawnStar = async () => {
-    const signer = await provider.getSigner();
+    // const signer = await provider.getSigner();
+    const signer = new ethers.Wallet(PRIVATE_KEY, provider);
 
     const contract_ecliptic = new ethers.Contract(
       ECLIPTIC_ADDRESS,
@@ -117,7 +124,8 @@ const MyApp = () => {
       return;
     }
 
-    const signer = await provider.getSigner();
+    // const signer = await provider.getSigner();
+    const signer = new ethers.Wallet(PRIVATE_KEY, provider);
 
     const contract_ecliptic = new ethers.Contract(
       ECLIPTIC_ADDRESS,
@@ -169,7 +177,8 @@ const MyApp = () => {
       return;
     }
 
-    const signer = await provider.getSigner();
+    // const signer = await provider.getSigner();
+    const signer = new ethers.Wallet(PRIVATE_KEY, provider);
 
     const contract_ecliptic = new ethers.Contract(
       ECLIPTIC_ADDRESS,
@@ -248,7 +257,8 @@ const MyApp = () => {
   const withdrawCapacity = async () => {
     if (!selectedShip) return;
 
-    const signer = await provider.getSigner();
+    // const signer = await provider.getSigner();
+    const signer = new ethers.Wallet(PRIVATE_KEY, provider);
 
     const contract_treasury = new ethers.Contract(
       PLANET_TREASURY_ADDRESS,
@@ -277,7 +287,8 @@ const MyApp = () => {
   const depositCapacity = async () => {
     if (!selectedShip) return;
 
-    const signer = await provider.getSigner();
+    // const signer = await provider.getSigner();
+    const signer = new ethers.Wallet(PRIVATE_KEY, provider);
 
     const contract_treasury = new ethers.Contract(
       PLANET_TREASURY_ADDRESS,
@@ -324,7 +335,8 @@ const MyApp = () => {
   const configureKeys = async () => {
     if (!selectedShip) return;
 
-    const signer = await provider.getSigner();
+    // const signer = await provider.getSigner();
+    const signer = new ethers.Wallet(PRIVATE_KEY, provider);
 
     const contract_ecliptic = new ethers.Contract(
       ECLIPTIC_ADDRESS,
@@ -361,7 +373,8 @@ const MyApp = () => {
 
   const fetchWallet = async () => {
     // hardcoded to hardhat default address
-    return "0xf39Fd6e51aad88F6F4ce6aB8827279cffFb92266";
+    // return "0xf39Fd6e51aad88F6F4ce6aB8827279cffFb92266";
+    return "0x158Ca8fEDEBF3CBD2dB71b3a54e0932B19DdAb6f";
   };
 
   const fetchShips = async () => {
@@ -484,9 +497,13 @@ const MyApp = () => {
   };
 
   return (
+    // let's make it scrollable
     <div>
       <div
         style={{
+          // padding: "20px",
+          overflowY: "scroll",
+
           position: "fixed",
           backgroundColor: "#111111",
           top: 0,
@@ -597,6 +614,8 @@ const MyApp = () => {
                 display: "flex",
                 flexDirection: "row",
                 flexWrap: "wrap",
+                justifyContent: "center",
+                maxWidth: "700px",
               }}
             >
               {allShips.map((ship, index) => (
@@ -788,4 +807,4 @@ const MyApp = () => {
     </div>
   );
 };
-export default MyApp;
+export default TokenUI;
